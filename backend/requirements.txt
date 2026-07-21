@@ -19,3 +19,10 @@ numpy==2.2.1
 pydub==0.25.1        # audio format handling
 requests==2.32.4
 
+# Part 2: TTS (Janat) — coqui XTTS-v2, local, en/ru native + kk via phonetic bridge
+coqui-tts[codec]>=0.27   # maintained fork of coqui-ai/TTS ([codec] = torchcodec for torch>=2.9)
+transformers<5           # transformers 5.x breaks coqui-tts imports
+torch>=2.4
+torchaudio
+# mp3 encoding uses PyAV, already pulled in by faster-whisper
+
