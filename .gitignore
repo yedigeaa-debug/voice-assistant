@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+
+# Env / secrets
+.env
+.env.local
+*.key
+
+# Audio scratch
+*.wav
+*.mp3
+!frontend/**/*.mp3
+tmp/
+audio_cache/
+
+# Node (MCP Playwright uses npx; Chromium cache)
+node_modules/
+.playwright/
+ms-playwright/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
