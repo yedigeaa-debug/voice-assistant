@@ -2,12 +2,10 @@
 
 Scratch space for experiments, model downloads, notebooks, notes.
 
-Your production code goes in **`backend/app/asr.py`** — implement:
+✅ **Done & merged.** Your code lives in **`backend/app/asr/`** (provider
+abstraction: `base.py`, `openai_whisper.py`, `local_whisper.py`, factory in
+`__init__.py`) plus `backend/app/config.py`.
 
-```python
-def transcribe(audio: bytes, *, content_type: str = "audio/webm") -> str: ...
-```
-
-Whisper API / faster-whisper / nvidia-parakeet — your choice. Once it returns
-text, the whole pipeline uses it automatically (no other file to touch).
-Bonus: streaming ASR over the `/ws/asr` WebSocket in `main.py`.
+Integration: `asr/adapter.py` exposes `transcribe(bytes) -> str` so the agent
+pipeline (parts 3/4) and the real-time bonus call your providers automatically.
+Standalone endpoint `POST /api/transcribe` returns the full `TranscriptionResult`.

@@ -16,8 +16,18 @@ from __future__ import annotations
 
 import base64
 import os
+import tempfile
+from pathlib import Path
 
-from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    File,
+    HTTPException,
+    Query,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -118,6 +128,35 @@ async def agent_from_text(payload: dict) -> ChatResponse:
     if not transcript:
         return ChatResponse(transcript="", answer="Пустой запрос.")
     return await _answer(transcript)
+
+
+@app.post("/api/transcribe")
+async def transcribe_only(
+    file: UploadFile = File(...),
+    provider: str | None = Query(None, description="'local' or 'openai' (else from config)"),
+    language: str | None = Query(None, description="ISO-639-1, e.g. 'ru'; empty = config"),
+) -> dict:
+    """
+    Part 1 standalone endpoint (Dana): audio -> rich transcription result, no agent.
+    Useful for testing ASR in isolation. Returns text + language + segments.
+    """
+    from .asr import get_asr
+    from .config import ASR_LANGUAGE
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "Empty file")
+    try:
+        provider_obj = get_asr(provider)
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(400, str(e))
+
+    suffix = Path(file.filename or "audio.webm").suffix.lower() or ".webm"
+    with tempfile.NamedTemporaryFile(suffix=suffix) as tmp:
+        tmp.write(data)
+        tmp.flush()
+        result = provider_obj.transcribe(tmp.name, language=language or ASR_LANGUAGE)
+    return result.to_dict()
 
 
 @app.websocket("/ws/asr")
