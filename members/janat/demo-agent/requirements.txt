@@ -1,0 +1,11 @@
+# Python >= 3.10 (tested on 3.12)
+coqui-tts>=0.27          # maintained fork of coqui-ai/TTS, ships XTTS-v2
+torch>=2.4
+torchaudio
+faster-whisper>=1.0      # ASR: en/ru/kk with auto language detection
+requests
+beautifulsoup4
+sounddevice              # microphone capture
+soundfile
+# optional, for LLM-polished answers:
+# anthropic
