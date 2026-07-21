@@ -43,10 +43,12 @@ voice-assistant/
 
 | Part | Component | Folder / file | Owner |
 |------|-----------|---------------|-------|
-| 1 | ASR (Speech→Text) | `backend/app/asr.py` | _teammate_ |
-| 2 | TTS (Text→Speech) | `backend/app/tts.py` | _teammate_ |
-| **3** | **LangChain Agent + MCP Playwright** | `backend/app/agent.py`, `mcp_config.py` | **you (yedigeaa-debug)** |
-| **4** | **Backend orchestration + Frontend** | `backend/app/main.py`, `frontend/` | **you (yedigeaa-debug)** |
+| 1 | ASR (Speech→Text) | `backend/app/asr.py` | **Dana** |
+| 2 | TTS (Text→Speech) | `backend/app/tts.py` | **Janat** |
+| **3** | **LangChain Agent + MCP Playwright** | `backend/app/agent.py`, `mcp_config.py` | **Yedige (yedigeaa-debug)** |
+| **4** | **Backend orchestration + Frontend** | `backend/app/main.py`, `frontend/` | **Yedige (yedigeaa-debug)** |
+
+Each member also has a personal sandbox under [`members/`](members/) for experiments.
 
 Parts 1 & 2 are wired as **clean interfaces** — teammates implement the two functions in
 `asr.py` / `tts.py` and the whole pipeline works, no other file needs to change.

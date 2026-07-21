@@ -45,12 +45,14 @@ merging. Don't merge your own PR without a review.
 
 ## 5. Ownership map
 
-| Part | You implement | File(s) | Notes |
-|------|---------------|---------|-------|
-| 1 · ASR | `transcribe(audio, content_type) -> str` | `backend/app/asr.py` | Whisper / faster-whisper / parakeet |
-| 2 · TTS | `synthesize(text, voice) -> bytes` (mp3) | `backend/app/tts.py` | ElevenLabs / XTTS / Fish Speech |
-| 3 · Agent | *(done)* | `backend/app/agent.py`, `mcp_config.py` | add/adjust `TARGET_SITES` |
-| 4 · Backend+Frontend | *(done)* | `backend/app/main.py`, `frontend/` | |
+| Part | Owner | Implement | File(s) | Notes |
+|------|-------|-----------|---------|-------|
+| 1 · ASR | **Dana** | `transcribe(audio, content_type) -> str` | `backend/app/asr.py` | Whisper / faster-whisper / parakeet |
+| 2 · TTS | **Janat** | `synthesize(text, voice) -> bytes` (mp3) | `backend/app/tts.py` | ElevenLabs / XTTS / Fish Speech |
+| 3 · Agent | **Yedige** | *(done)* | `backend/app/agent.py`, `mcp_config.py` | add/adjust `TARGET_SITES` |
+| 4 · Backend+Frontend | **Yedige** | *(done)* | `backend/app/main.py`, `frontend/` | |
+
+Personal experiment space per member lives under `members/<name>/`.
 
 **The key rule:** parts 1 & 2 are just those two functions. Implement them and the
 whole pipeline works — you don't touch anyone else's file.
