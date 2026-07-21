@@ -75,22 +75,25 @@ def _split_answer_and_data(text: str) -> tuple[str, list[Event], list[str]]:
 
 async def run_agent(user_text: str) -> AgentResult:
     """Run one turn of the agent over the user's transcribed request."""
-    client = MultiServerMCPClient(playwright_mcp_server())
-    tools = await client.get_tools()
+    # MultiServerMCPClient is an async context manager: entering it connects to
+    # every configured server (spawns/talks to the Playwright MCP process) and
+    # populates its tool list; get_tools() itself is synchronous.
+    async with MultiServerMCPClient(playwright_mcp_server()) as client:
+        tools = client.get_tools()
 
-    llm = ChatOpenAI(model=SETTINGS.llm_model, temperature=0.2)
-    agent = create_react_agent(llm, tools)
+        llm = ChatOpenAI(model=SETTINGS.llm_model, temperature=0.2)
+        agent = create_react_agent(llm, tools)
 
-    result = await agent.ainvoke(
-        {
-            "messages": [
-                SystemMessage(content=_system_prompt()),
-                HumanMessage(content=user_text),
-            ]
-        },
-        # allow enough steps to navigate + read a couple of pages
-        config={"recursion_limit": 40},
-    )
+        result = await agent.ainvoke(
+            {
+                "messages": [
+                    SystemMessage(content=_system_prompt()),
+                    HumanMessage(content=user_text),
+                ]
+            },
+            # allow enough steps to navigate + read a couple of pages
+            config={"recursion_limit": 40},
+        )
 
     final = result["messages"][-1].content
     if isinstance(final, list):  # some providers return content blocks
