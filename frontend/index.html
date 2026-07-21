@@ -19,15 +19,22 @@
     }
     .app { width: min(560px, 92vw); padding: 28px; }
     h1 { font-size: 20px; margin: 0 0 4px; font-weight: 650; }
-    .sub { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+    .sub { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
 
-    .stage { display: grid; place-items: center; gap: 20px; padding: 24px 0 8px; }
+    .modes { display: flex; gap: 6px; margin-bottom: 20px; }
+    .modes button {
+      flex: 1; background: var(--card); color: var(--muted); border: 1px solid var(--line);
+      border-radius: 10px; padding: 8px 10px; font-size: 12px; cursor: pointer;
+    }
+    .modes button.active { color: var(--fg); border-color: var(--accent); background: #16202f; }
+
+    .stage { display: grid; place-items: center; gap: 20px; padding: 16px 0 8px; }
     .mic {
       --size: 132px; width: var(--size); height: var(--size); border-radius: 50%;
       border: none; cursor: pointer; color: white; font-size: 40px;
       background: linear-gradient(135deg, var(--accent), var(--accent2));
       box-shadow: 0 10px 40px rgba(110,168,254,.35); transition: transform .15s ease;
-      position: relative; display: grid; place-items: center;
+      display: grid; place-items: center;
     }
     .mic:active { transform: scale(.96); }
     .mic:disabled { opacity: .6; cursor: default; }
@@ -37,7 +44,6 @@
       100% { box-shadow: 0 0 0 32px rgba(248,113,113,0); }
     }
 
-    /* thinking animation */
     .thinking { display: none; gap: 8px; height: 40px; align-items: flex-end; }
     .thinking.on { display: flex; }
     .thinking span {
@@ -56,8 +62,11 @@
       background: var(--card); border: 1px solid var(--line); border-radius: 14px;
       padding: 14px 16px; margin-top: 8px; font-size: 15px; line-height: 1.5;
     }
+    .bubble.live { border-color: var(--accent); }
     .label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 6px; }
     .you { color: var(--accent); }
+    .caret::after { content: "▋"; animation: blink 1s step-end infinite; color: var(--accent); }
+    @keyframes blink { 50% { opacity: 0 } }
     .events { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 8px; }
     .events li { background: #0f131b; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font-size: 14px; }
     .events .when { color: var(--muted); font-size: 12px; }
@@ -71,10 +80,20 @@
     <h1>🎙️ Voice AI Assistant</h1>
     <div class="sub">Спроси голосом, куда сходить сегодня в Алматы — я поищу в афишах и отвечу.</div>
 
+    <div class="modes">
+      <button id="modeBatch" class="active">Обычный режим</button>
+      <button id="modeRealtime">⚡ Real-time (bonus)</button>
+    </div>
+
     <div class="stage">
       <button id="mic" class="mic" title="Нажми и говори">🎤</button>
       <div id="thinking" class="thinking"><span></span><span></span><span></span><span></span></div>
       <div id="status" class="status">Нажми на микрофон и говори</div>
+    </div>
+
+    <div id="liveWrap" class="bubble live hidden">
+      <div class="label you">Слышу вас…</div>
+      <div id="live" class="caret"></div>
     </div>
 
     <div id="youWrap" class="bubble hidden">
@@ -94,77 +113,169 @@
 
   <script>
     const API = "http://localhost:8000";
-    const micBtn = document.getElementById("mic");
-    const thinking = document.getElementById("thinking");
-    const statusEl = document.getElementById("status");
-    const youWrap = document.getElementById("youWrap");
-    const youEl = document.getElementById("you");
-    const answerWrap = document.getElementById("answerWrap");
-    const answerEl = document.getElementById("answer");
-    const eventsEl = document.getElementById("events");
-    const sourcesEl = document.getElementById("sources");
-    const player = document.getElementById("player");
+    const WS = API.replace(/^http/, "ws");
+    const $ = (id) => document.getElementById(id);
+    const micBtn = $("mic"), thinking = $("thinking"), statusEl = $("status");
+    const liveWrap = $("liveWrap"), liveEl = $("live");
+    const youWrap = $("youWrap"), youEl = $("you");
+    const answerWrap = $("answerWrap"), answerEl = $("answer");
+    const eventsEl = $("events"), sourcesEl = $("sources"), player = $("player");
 
-    let mediaRecorder, chunks = [], recording = false;
+    let mode = "batch";           // "batch" | "realtime"
+    let recording = false;
 
-    micBtn.addEventListener("click", async () => {
-      recording ? stopRecording() : startRecording();
-    });
-
-    async function startRecording() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        mediaRecorder = new MediaRecorder(stream);
-        chunks = [];
-        mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
-        mediaRecorder.onstop = () => {
-          stream.getTracks().forEach((t) => t.stop());
-          sendAudio(new Blob(chunks, { type: "audio/webm" }));
-        };
-        mediaRecorder.start();
-        recording = true;
-        micBtn.classList.add("recording");
-        micBtn.textContent = "⏹";
-        statusEl.textContent = "Слушаю… нажми ещё раз, чтобы закончить";
-      } catch (err) {
-        statusEl.textContent = "Не удалось получить доступ к микрофону: " + err.message;
-      }
+    $("modeBatch").onclick = () => setMode("batch");
+    $("modeRealtime").onclick = () => setMode("realtime");
+    function setMode(m) {
+      if (recording) return;
+      mode = m;
+      $("modeBatch").classList.toggle("active", m === "batch");
+      $("modeRealtime").classList.toggle("active", m === "realtime");
+      statusEl.textContent = m === "realtime"
+        ? "Real-time: текст появляется, пока вы говорите"
+        : "Нажми на микрофон и говори";
     }
 
-    function stopRecording() {
-      recording = false;
-      micBtn.classList.remove("recording");
-      micBtn.textContent = "🎤";
-      mediaRecorder && mediaRecorder.stop();
-    }
+    micBtn.onclick = () => {
+      if (recording) return stop();
+      resetUI();
+      mode === "realtime" ? startRealtime() : startBatch();
+    };
 
-    async function sendAudio(blob) {
-      setThinking(true, "Думаю: ищу события в афишах…");
-      const form = new FormData();
-      form.append("audio", blob, "recording.webm");
-      try {
-        const res = await fetch(`${API}/api/chat`, { method: "POST", body: form });
-        if (!res.ok) throw new Error("HTTP " + res.status);
-        const data = await res.json();
-        render(data);
-      } catch (err) {
-        statusEl.textContent = "Ошибка: " + err.message + " (бэкенд запущен на :8000?)";
-      } finally {
-        setThinking(false, "");
-      }
+    function resetUI() {
+      [liveWrap, youWrap, answerWrap].forEach((el) => el.classList.add("hidden"));
+      liveEl.textContent = ""; youEl.textContent = ""; answerEl.textContent = "";
+      eventsEl.innerHTML = ""; sourcesEl.textContent = "";
     }
-
+    function recUI(on) {
+      recording = on;
+      micBtn.classList.toggle("recording", on);
+      micBtn.textContent = on ? "⏹" : "🎤";
+    }
     function setThinking(on, msg) {
       thinking.classList.toggle("on", on);
       micBtn.disabled = on;
       statusEl.textContent = msg || (on ? "" : "Нажми на микрофон и говори");
     }
 
+    /* ---------- BATCH MODE (POST /api/chat) ---------- */
+    let mediaRecorder, chunks = [], activeStream;
+    async function startBatch() {
+      try {
+        activeStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(activeStream);
+        chunks = [];
+        mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
+        mediaRecorder.onstop = () => {
+          activeStream.getTracks().forEach((t) => t.stop());
+          sendBatch(new Blob(chunks, { type: "audio/webm" }));
+        };
+        mediaRecorder.start();
+        recUI(true);
+        statusEl.textContent = "Слушаю… нажми ещё раз, чтобы закончить";
+      } catch (err) { statusEl.textContent = "Микрофон недоступен: " + err.message; }
+    }
+    async function sendBatch(blob) {
+      setThinking(true, "Думаю: ищу события в афишах…");
+      const form = new FormData();
+      form.append("audio", blob, "recording.webm");
+      try {
+        const res = await fetch(`${API}/api/chat`, { method: "POST", body: form });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        render(await res.json());
+      } catch (err) {
+        statusEl.textContent = "Ошибка: " + err.message + " (бэкенд на :8000?)";
+      } finally { setThinking(false, ""); }
+    }
+
+    /* ---------- REAL-TIME MODE (WS /ws/asr, 16kHz PCM) ---------- */
+    let audioCtx, workletNode, ws, rtStream, finalText = "";
+    async function startRealtime() {
+      try {
+        rtStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (err) { statusEl.textContent = "Микрофон недоступен: " + err.message; return; }
+
+      ws = new WebSocket(`${WS}/ws/asr`);
+      ws.binaryType = "arraybuffer";
+      liveWrap.classList.remove("hidden");
+      finalText = "";
+
+      ws.onmessage = (ev) => {
+        const data = JSON.parse(ev.data);
+        if (data.error) { statusEl.textContent = "⚠️ " + data.error; stop(); return; }
+        if (data.partial != null) { liveEl.textContent = data.partial; }
+        if (data.done) { finalText = data.final || liveEl.textContent; onSpeechDone(finalText); }
+      };
+      ws.onerror = () => { statusEl.textContent = "WebSocket ошибка (бэкенд на :8000?)"; };
+
+      // Downsample mic to 16kHz mono PCM16 via an inline AudioWorklet.
+      audioCtx = new AudioContext();
+      const workletCode = `
+        class PCM extends AudioWorkletProcessor {
+          constructor(){ super(); this._ratio = sampleRate / 16000; this._acc = 0; }
+          process(inputs){
+            const ch = inputs[0][0]; if(!ch) return true;
+            const out = [];
+            for(let i=0;i<ch.length;i++){
+              this._acc += 1;
+              if(this._acc >= this._ratio){ this._acc -= this._ratio; out.push(ch[i]); }
+            }
+            if(out.length){
+              const buf = new Int16Array(out.length);
+              for(let i=0;i<out.length;i++){ const s=Math.max(-1,Math.min(1,out[i])); buf[i]=s<0?s*0x8000:s*0x7fff; }
+              this.port.postMessage(buf.buffer, [buf.buffer]);
+            }
+            return true;
+          }
+        }
+        registerProcessor('pcm', PCM);`;
+      const url = URL.createObjectURL(new Blob([workletCode], { type: "application/javascript" }));
+      await audioCtx.audioWorklet.addModule(url);
+      const src = audioCtx.createMediaStreamSource(rtStream);
+      workletNode = new AudioWorkletNode(audioCtx, "pcm");
+      workletNode.port.onmessage = (e) => { if (ws.readyState === 1) ws.send(e.data); };
+      src.connect(workletNode);
+
+      recUI(true);
+      statusEl.textContent = "Говорите… текст появляется в реальном времени";
+    }
+
+    async function onSpeechDone(text) {
+      liveWrap.classList.add("hidden");
+      if (text) { youWrap.classList.remove("hidden"); youEl.textContent = text; }
+      if (!text) { setThinking(false, "Ничего не распознано."); return; }
+      // Real-time ASR already gave us the text -> go straight to the agent.
+      setThinking(true, "Думаю: ищу события в афишах…");
+      try {
+        const res = await fetch(`${API}/api/agent`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = await res.json();
+        render(data);
+        // Bonus: if no batch audio came back, try streaming TTS.
+        if (!data.audio_base64 && data.answer) speakStreaming(data.answer);
+      } catch (err) {
+        statusEl.textContent = "Ошибка: " + err.message + " (бэкенд на :8000?)";
+      } finally { setThinking(false, ""); }
+    }
+
+    function stop() {
+      recUI(false);
+      if (mode === "batch") { mediaRecorder && mediaRecorder.stop(); return; }
+      // realtime: flush + close
+      try { if (ws && ws.readyState === 1) ws.send("__END__"); } catch {}
+      workletNode && workletNode.disconnect();
+      audioCtx && audioCtx.close();
+      rtStream && rtStream.getTracks().forEach((t) => t.stop());
+    }
+
+    /* ---------- shared rendering ---------- */
     function render(data) {
       if (data.transcript) { youWrap.classList.remove("hidden"); youEl.textContent = data.transcript; }
       answerWrap.classList.remove("hidden");
       answerEl.textContent = data.answer || "";
-
       eventsEl.innerHTML = "";
       (data.events || []).forEach((ev) => {
         const li = document.createElement("li");
@@ -173,15 +284,31 @@
           ((ev.when || ev.venue) ? `<div class="when">${[ev.when, ev.venue].filter(Boolean).join(" · ")}</div>` : "");
         eventsEl.appendChild(li);
       });
-
       sourcesEl.textContent = (data.sources || []).length ? "Источники: " + data.sources.join(", ") : "";
+      data.audio_base64 ? playBase64(data.audio_base64) : (statusEl.textContent = "🔇 TTS (Part 2) ещё не подключён — ответ показан текстом.");
+    }
+    function playBase64(b64) { player.src = "data:audio/mpeg;base64," + b64; player.play().catch(() => {}); }
 
-      if (data.audio_base64) {
-        player.src = "data:audio/mpeg;base64," + data.audio_base64;
-        player.play().catch(() => {});
-      } else {
-        statusEl.textContent = "🔇 TTS (Part 2) ещё не подключён — ответ показан текстом.";
-      }
+    /* ---------- bonus: streaming TTS (POST /api/tts/stream) ---------- */
+    async function speakStreaming(text) {
+      const res = await fetch(`${API}/api/tts/stream`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok || !res.body) return;
+      // MediaSource lets playback start while chunks are still arriving.
+      const ms = new MediaSource();
+      player.src = URL.createObjectURL(ms);
+      ms.addEventListener("sourceopen", async () => {
+        const sb = ms.addSourceBuffer("audio/mpeg");
+        const reader = res.body.getReader();
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) { ms.endOfStream(); break; }
+          await new Promise((r) => { sb.appendBuffer(value); sb.onupdateend = r; });
+        }
+      });
+      player.play().catch(() => {});
     }
   </script>
 </body>

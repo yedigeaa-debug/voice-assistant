@@ -81,7 +81,18 @@ open ../frontend/index.html          # or serve it: python -m http.server 5500
 - [ ] Code organized — backend/frontend split, logical API
 - [ ] Team uses Git (branches, PRs, regular commits from everyone)
 
-## 🌟 Bonus (Advanced / real-time)
+## 🌟 Bonus (Advanced / real-time) — implemented
 
-- Real-time ASR over WebSocket (`faster-whisper-small`) — stub endpoint `/ws/asr` is scaffolded
-- Streaming TTS back to the frontend — see `docs/ARCHITECTURE.md`
+Both bonus tasks are built and wired end-to-end. Toggle **⚡ Real-time** in the UI.
+
+**1. Real-time ASR over WebSocket** (`faster-whisper-small`, local)
+- Backend: `WS /ws/asr` runs a `StreamingTranscriber` ([realtime_asr.py](backend/app/realtime_asr.py)) — rolling buffer, partial transcripts every ~0.7 s.
+- Frontend: an AudioWorklet downsamples the mic to 16 kHz mono PCM and streams it while you talk; text appears live with a blinking caret.
+- Then the transcript goes to `POST /api/agent` (skips ASR) → agent answers.
+- Enable: `pip install faster-whisper numpy` (already in `requirements.txt`). First run downloads the `small` model. Check `GET /api/health` → `bonus`.
+
+**2. Streaming TTS** (`POST /api/tts/stream`)
+- Backend streams mp3 chunks via `tts.synthesize_stream()` ([tts.py](backend/app/tts.py)) — ElevenLabs streaming reference included (commented); Janat swaps in the provider.
+- Frontend plays it through `MediaSource` so audio starts before synthesis finishes.
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the protocol details.

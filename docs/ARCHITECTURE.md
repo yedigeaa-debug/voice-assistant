@@ -40,15 +40,37 @@ agent decides which site to visit from the system prompt's site catalog.
 
 Requirements: Node.js (for `npx`) and Chromium (downloaded on first run).
 
-## Bonus: real-time (advanced level)
+## Bonus: real-time (advanced level) — implemented
 
-**Real-time ASR (WebSocket).** Endpoint `WS /ws/asr` is scaffolded in `main.py`.
-The frontend would stream audio chunks (from `MediaRecorder` with a small
-`timeslice`) while the user is still speaking; the ASR teammate plugs a streaming
-recognizer (e.g. `faster-whisper-small`) at the marked spot and pushes partial
-transcripts back with `ws.send_json({"partial": ...})`. The UI shows text live.
+### 1. Real-time ASR over WebSocket
 
-**Streaming TTS.** Add `synthesize_stream(text) -> AsyncIterator[bytes]` in
-`tts.py` (ElevenLabs streaming API or a local XTTS-v2 / Fish Speech stream) and a
-`StreamingResponse` endpoint so audio starts playing before the full answer is
-generated. Combine with the agent streaming tokens for lowest perceived latency.
+```
+Browser                                  Backend  (WS /ws/asr)
+  AudioWorklet: mic -> 16kHz mono PCM16
+  ── binary PCM frames ───────────────▶  StreamingTranscriber.feed()
+                                           (faster-whisper-small, rolling buffer)
+  ◀── {"partial": "..."} every ~0.7s ──   re-transcribe on new audio
+  ── text "__END__" (user stopped) ────▶  StreamingTranscriber.final()
+  ◀── {"final": "...", "done": true} ──
+  then POST /api/agent {text} ─────────▶  agent (skips ASR) -> answer
+```
+
+Files: `backend/app/realtime_asr.py` (model + buffering), `main.py` (`/ws/asr`,
+`/api/agent`), `frontend/index.html` (AudioWorklet + WS client, live caret UI).
+Blocking transcription runs in `asyncio.to_thread` so the event loop stays free.
+If `faster-whisper` isn't installed, the socket returns a clear `{"error": ...}`.
+
+### 2. Streaming TTS
+
+```
+Browser                          Backend (POST /api/tts/stream)
+  fetch(text) ─────────────────▶ tts.synthesize_stream(text)  (async generator)
+  MediaSource.appendBuffer  ◀─── StreamingResponse: mp3 chunks as generated
+  playback starts on 1st chunk
+```
+
+`tts.py::synthesize_stream` ships with a commented ElevenLabs streaming reference;
+until Janat wires a provider it falls back to yielding the batch `synthesize()`
+result as one chunk, so the endpoint always works. Swap in XTTS-v2 / Fish Speech
+streaming the same way. Combining this with agent token streaming would cut
+perceived latency further (future work).

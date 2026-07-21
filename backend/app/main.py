@@ -5,10 +5,11 @@ Wires the whole pipeline together:
     audio  --ASR-->  text  --Agent(+MCP)-->  answer  --TTS-->  audio
 
 Endpoints:
-    GET  /api/health   liveness + which parts are wired
-    POST /api/chat     multipart audio upload -> ChatResponse (transcript, answer,
-                       events, sources, base64 mp3)
-    WS   /ws/asr       (bonus) real-time ASR stub — see docstring
+    GET  /api/health       liveness + which parts are wired
+    POST /api/chat         multipart audio upload -> ChatResponse (transcript,
+                           answer, events, sources, base64 mp3)
+    WS   /ws/asr           (bonus) real-time ASR — streams partial transcripts
+    POST /api/tts/stream   (bonus) streaming TTS — mp3 chunks as they generate
 """
 
 from __future__ import annotations
@@ -18,10 +19,11 @@ import os
 
 from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from . import asr, tts
 from .agent import run_agent
+from .realtime_asr import RealtimeASRUnavailable, StreamingTranscriber
 from .schemas import ChatResponse
 
 app = FastAPI(title="Voice AI Assistant", version="0.1.0")
@@ -45,6 +47,13 @@ async def health() -> dict:
             return "wired"
         return "wired"
 
+    def realtime_asr_available() -> str:
+        try:
+            import faster_whisper  # noqa: F401
+            return "available (faster-whisper installed)"
+        except ImportError:
+            return "install faster-whisper to enable"
+
     return {
         "status": "ok",
         "parts": {
@@ -52,37 +61,20 @@ async def health() -> dict:
             "agent+mcp (part 3)": "wired",
             "tts (part 2)": wired(lambda: tts.synthesize("")),
         },
+        "bonus": {
+            "realtime asr (/ws/asr)": realtime_asr_available(),
+            "streaming tts (/api/tts/stream)": "endpoint ready; needs synthesize_stream()",
+        },
     }
 
 
-@app.post("/api/chat", response_model=ChatResponse)
-async def chat(audio: UploadFile = File(...)) -> ChatResponse:
-    raw = await audio.read()
-    content_type = audio.content_type or "audio/webm"
-
-    # 1) ASR (Part 1)
-    try:
-        transcript = asr.transcribe(raw, content_type=content_type)
-    except asr.ASRNotImplemented:
-        transcript = ""
-
-    if not transcript.strip():
-        return ChatResponse(
-            transcript="",
-            answer="Я не расслышал(а) запрос. Похоже, модуль распознавания речи (Part 1) ещё не подключён.",
-            events=[],
-            sources=[],
-            audio_base64=None,
-        )
-
-    # 2) Agent + MCP Playwright (Part 3)
+async def _answer(transcript: str) -> ChatResponse:
+    """Agent (Part 3) + optional TTS (Part 2) for an already-transcribed request."""
     result = await run_agent(transcript)
 
-    # 3) TTS (Part 2) — optional; pipeline still returns text if not wired
     audio_b64: str | None = None
     try:
-        mp3 = tts.synthesize(result.answer)
-        audio_b64 = base64.b64encode(mp3).decode("ascii")
+        audio_b64 = base64.b64encode(tts.synthesize(result.answer)).decode("ascii")
     except tts.TTSNotImplemented:
         audio_b64 = None
 
@@ -95,23 +87,96 @@ async def chat(audio: UploadFile = File(...)) -> ChatResponse:
     )
 
 
+@app.post("/api/chat", response_model=ChatResponse)
+async def chat(audio: UploadFile = File(...)) -> ChatResponse:
+    """Batch pipeline: audio -> ASR -> agent -> TTS."""
+    raw = await audio.read()
+    content_type = audio.content_type or "audio/webm"
+
+    try:
+        transcript = asr.transcribe(raw, content_type=content_type)
+    except asr.ASRNotImplemented:
+        transcript = ""
+
+    if not transcript.strip():
+        return ChatResponse(
+            transcript="",
+            answer="Я не расслышал(а) запрос. Похоже, модуль распознавания речи (Part 1) ещё не подключён.",
+        )
+
+    return await _answer(transcript)
+
+
+@app.post("/api/agent", response_model=ChatResponse)
+async def agent_from_text(payload: dict) -> ChatResponse:
+    """
+    Text-in pipeline used by real-time mode: the /ws/asr WebSocket already produced
+    the transcript on the client, so we skip ASR and go straight to agent + TTS.
+    POST {"text": "..."}.
+    """
+    transcript = (payload or {}).get("text", "").strip()
+    if not transcript:
+        return ChatResponse(transcript="", answer="Пустой запрос.")
+    return await _answer(transcript)
+
+
 @app.websocket("/ws/asr")
 async def ws_asr(ws: WebSocket) -> None:
     """
-    Bonus (real-time ASR): the frontend streams audio chunks here while the user
-    is still speaking; the server transcribes incrementally and pushes partial
-    text back. This stub just echoes chunk sizes — the ASR teammate plugs a
-    streaming model (e.g. faster-whisper-small) into the marked spot.
+    Bonus (real-time ASR). Protocol:
+      client -> server : binary frames = 16-bit mono PCM @ 16 kHz (mic audio),
+                         then a text frame "__END__" when the user stops talking.
+      server -> client : {"partial": "..."} live as speech comes in,
+                         {"final": "...", "done": true} once, at the end,
+                         {"error": "..."} if the local model isn't available.
+
+    Runs faster-whisper-small locally (see realtime_asr.py). The transcription is
+    blocking, so it's offloaded to a thread to keep the event loop responsive.
     """
+    import asyncio
+
     await ws.accept()
     try:
+        transcriber = StreamingTranscriber(language="ru")
+    except RealtimeASRUnavailable as e:
+        await ws.send_json({"error": str(e)})
+        await ws.close()
+        return
+
+    try:
         while True:
-            chunk = await ws.receive_bytes()
-            # >>> ASR teammate: feed `chunk` to a streaming recognizer and send
-            #     back partial transcripts, e.g. await ws.send_json({"partial": ...})
-            await ws.send_json({"partial": "", "bytes_received": len(chunk)})
+            msg = await ws.receive()
+            if msg.get("type") == "websocket.disconnect":
+                return
+            if (data := msg.get("bytes")) is not None:
+                partial = await asyncio.to_thread(transcriber.feed, data)
+                if partial:
+                    await ws.send_json({"partial": partial})
+            elif msg.get("text") == "__END__":
+                final = await asyncio.to_thread(transcriber.final)
+                await ws.send_json({"final": final, "done": True})
+                return
     except WebSocketDisconnect:
         return
+
+
+@app.post("/api/tts/stream")
+async def tts_stream(payload: dict) -> StreamingResponse:
+    """
+    Bonus (streaming TTS): POST {"text": "...", "voice": "..."} and get mp3 back as
+    a chunked stream, so playback can start before synthesis finishes.
+    """
+    text = (payload or {}).get("text", "")
+    voice = (payload or {}).get("voice")
+
+    async def gen():
+        try:
+            async for chunk in tts.synthesize_stream(text, voice=voice):
+                yield chunk
+        except tts.TTSNotImplemented:
+            return  # empty stream; frontend shows text-only fallback
+
+    return StreamingResponse(gen(), media_type="audio/mpeg")
 
 
 @app.exception_handler(Exception)
